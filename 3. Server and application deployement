@@ -1,0 +1,149 @@
+provider "aws" {
+  region = "us-east-1"
+}
+
+#### application load balancer###
+resource "aws_lb" "tcw_alb" {
+  name               = "tcw_alb"
+  internal           = false
+  load_balancer_type = "application"
+  subnets            = data.aws_subnet_ids.private
+
+  enable_deletion_protection = false
+
+  tags = {
+    Environment = "developement"
+  }
+}
+#####Auto scaling group
+resource "aws_autoscaling_group" "tcw_asg" {
+ availability_zones = data.aws_availability_zones.available.names[0]
+  desired_capacity   = 1
+  max_size           = 1
+  min_size           = 1
+  target_group_arns = [aws_lb_target_group.tcw_tg.arn]
+
+  launch_template {
+    id      = aws_launch_template.tcw_LT.id
+    version = "$Latest"
+  }
+}
+###Listeners###
+resource "aws_lb_listener" "forward_listener" {
+  load_balancer_arn = aws_lb.tcw_alb.arn
+  port              = "80"
+  protocol          = "http"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.tcw_tg.arn
+  }
+}
+###Launch Template###
+
+resource "aws_launch_template" "tcw_LT" {
+  name = "tcw_LT"
+
+  block_device_mappings {
+    device_name = "/dev/sda1"
+
+    ebs {
+      volume_size = 20
+    }
+  }
+
+ vpc_zone_identifier= data.aws_subnet.selected.id
+
+  capacity_reservation_specification {
+    capacity_reservation_preference = "open"
+  }
+
+  image_id = "ami-test"
+
+  instance_initiated_shutdown_behavior = "terminate"
+
+
+  instance_type = "t2.micro"
+
+  kernel_id = "test"
+
+  key_name = "linux1"
+
+
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+    instance_metadata_tags      = "enabled"
+  }
+
+  monitoring {
+    enabled = true
+  }
+
+  network_interfaces {
+    associate_public_ip_address = true
+  }
+
+  vpc_security_group_ids = data.aws_security_group.selected.name
+
+  tag_specifications {
+    resource_type = "instance"
+
+    tags = {
+      Name = "test"
+    }
+  }
+
+  user_data = data.template_file.user_data.rendered
+}
+####Target Group###
+resource "aws_lb_target_group" "tcw_tg" {
+  name     = "tcw_tg"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = data.aws_vpc.vpc_available.id
+}
+data "aws_vpc" "vpc_available" {
+    filter {
+        name="tag:Name"
+        values="tcw_vpc"
+    }
+}
+
+data "aws_subnet_ids" "private" {
+  
+  filter {
+    name="tag:name"
+    values=["private_subnet*"]
+  }
+}
+
+data "aws_security_group" "selected" {
+ filter {
+    name="tag:name"
+    values=["tcw_security_group"]
+  }
+}   
+
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+data "aws_subnet" "selected" {
+  filter {
+    name   = "tag:Name"
+    values = ["public_subnet_1"]
+  }
+}
+####data source##3
+data "template_file" "user_data" {
+  template = file("./user-data.sh")
+}
+###user data shell script###
+#! /bin/bash -xe
+yum -y update
+yum -y upgrade
+yum install -y httpd
+systemctl enable httpd
+systemctl start httpd
